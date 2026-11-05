@@ -1,7 +1,8 @@
 " viminfo.vim - report the current file and cursor position to work-mcp.
 "
 " Posts to work-mcp's /viminfo endpoint (see viminfo.go) whenever the cursor
-" settles, and clears the position when vim exits. Works in Vim 8+ and Neovim;
+" settles, along with the other files open in vim, and clears it all when vim
+" exits. Works in Vim 8+ and Neovim;
 " needs curl on $PATH.
 "
 " Install: symlink or copy into ~/.vim/plugin/ (or ~/.config/nvim/plugin/).
@@ -34,6 +35,47 @@ let s:last_at = 0
 " age_seconds reflects that vim is still open rather than idle or closed.
 let s:refresh = 30
 
+" Report at most this many other open files, most recently used first.
+let s:max_buffers = 50
+
+function! s:relative(file) abort
+  return stridx(a:file, s:start_dir) == 0 ? a:file[len(s:start_dir):] : ''
+endfunction
+
+" The other listed buffers that hold files, most recently used first.
+function! s:buffers() abort
+  let infos = filter(getbufinfo({'buflisted': 1}),
+        \ 'v:val.bufnr != bufnr("%") && v:val.name !=# "" && getbufvar(v:val.bufnr, "&buftype") ==# ""')
+  call sort(infos, {a, b -> get(b, 'lastused', 0) - get(a, 'lastused', 0)})
+  let out = []
+  for b in infos[: s:max_buffers - 1]
+    let file = fnamemodify(b.name, ':p')
+    " b.windows spans all tabs; prefer a window in the current tab.
+    let here = filter(copy(b.windows), 'win_id2tabwin(v:val)[0] == tabpagenr()')
+    let win = empty(here) ? get(b.windows, 0, 0) : here[0]
+    let item = {
+          \ 'file': file,
+          \ 'modified': b.changed ? v:true : v:false,
+          \ 'visible': empty(here) ? v:false : v:true,
+          \ }
+    if win
+      let item.tab = win_id2tabwin(win)[0]
+    endif
+    " A file shown in a window has its cursor there; otherwise use the line
+    " the cursor was on when it was last shown.
+    let lnum = win ? line('.', win) : b.lnum
+    if lnum > 0
+      let item.line = lnum
+    endif
+    let rel = s:relative(file)
+    if rel !=# ''
+      let item.relative = rel
+    endif
+    call add(out, item)
+  endfor
+  return out
+endfunction
+
 " JSON for the current window, or '' if it isn't showing a file.
 function! s:payload() abort
   if &buftype !=# ''
@@ -49,10 +91,13 @@ function! s:payload() abort
         \ 'col': col('.'),
         \ 'visible': [line('w0'), line('w$')],
         \ 'filetype': &filetype,
+        \ 'tab': tabpagenr(),
         \ 'modified': &modified ? v:true : v:false,
+        \ 'buffers': s:buffers(),
         \ }
-  if stridx(file, s:start_dir) == 0
-    let p.relative = file[len(s:start_dir):]
+  let rel = s:relative(file)
+  if rel !=# ''
+    let p.relative = rel
   endif
   return json_encode(p)
 endfunction
@@ -146,9 +191,11 @@ command! -bar VimInfoDisable call s:enable(0)
 
 augroup work_viminfo
   autocmd!
-  autocmd CursorMoved,CursorMovedI,BufEnter,WinEnter,FocusGained * call s:schedule()
+  autocmd CursorMoved,CursorMovedI,BufEnter,WinEnter,TabEnter,FocusGained * call s:schedule()
   " The modified flag changes on edits and writes.
   autocmd TextChanged,TextChangedI,BufWritePost * call s:schedule()
+  " The list of other open files changes.
+  autocmd BufAdd,BufDelete * call s:schedule()
   if exists('##WinScrolled')
     autocmd WinScrolled * call s:schedule()
   endif
