@@ -92,7 +92,8 @@ func (vi *vimInfo) AddToMCP(m *mcp.Server) {
 	mcp.AddTool(
 		m,
 		&mcp.Tool{Name: "vim-info", Description: "Get the file open in the user's vim session and the cursor position in it. " +
-			"Use it when the user refers to code by where they are in vim. " +
+			"Use it when the user refers to code by where they are in vim, e.g. \"the function I'm looking at in vim\" or \"the file I have open in vim\". " +
+			"Only call it when the user mentions vim; \"this function\" or \"what am I looking at\" on their own don't mean vim. " +
 			"If modified is true, the buffer has unsaved changes and the file on disk may not match what they see. " +
 			"A large age_seconds means the position may be stale."},
 		func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, Status, error) {
